@@ -1,0 +1,29 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://api.easiergen.com/:path*",
+      "has": [
+        {
+          "type": "header",
+          "key": "x-api-key"
+        }
+      ]
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Credentials", "value": "true" },
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET,OPTIONS,PATCH,DELETE,POST,PUT" },
+        { "key": "Access-Control-Allow-Headers", "value": "X-API-Key, X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version" },
+        { "key": "Connection", "value": "keep-alive" },
+        { "key": "Keep-Alive", "value": "timeout=300" },
+        { "key": "cache-control", "value": "public, max-age=0, must-revalidate" }
+      ]
+    }
+  ],
+  "regions": ["fra1"]
+}
