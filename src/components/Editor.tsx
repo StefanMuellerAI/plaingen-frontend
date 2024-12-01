@@ -5,12 +5,16 @@ import { EmojiPicker } from './EmojiPicker';
 import { AsciiPicker } from './AsciiPicker';
 import { ContextMenu } from './ContextMenu';
 import { marked } from 'marked';
+import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../lib/supabase';
+import { Modal } from '../components/Modal';
+import { useLocation } from 'react-router-dom';
 
 interface EditorProps {
   title: string;
   text: string;
   cta: string;
-  disabled?: boolean;
+  disabled: boolean;
   onChange: (data: { title: string; text: string; cta: string }) => void;
 }
 
@@ -41,7 +45,10 @@ const REVERSE_ITALIC_CHARS: { [key: string]: string } = Object.fromEntries(
   Object.entries(ITALIC_CHARS).map(([k, v]) => [v, k])
 );
 
+const POST_LIMIT = 15;
+
 export function Editor({ title, text, cta, disabled = false, onChange }: EditorProps) {
+  const { user } = useAuth();
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showAsciiPicker, setShowAsciiPicker] = useState(false);
   const [charCount, setCharCount] = useState(0);
@@ -59,11 +66,21 @@ export function Editor({ title, text, cta, disabled = false, onChange }: EditorP
   });
   const [isTransforming, setIsTransforming] = useState(false);
   const [helpContent, setHelpContent] = useState('');
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
   
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const ctaRef = useRef<HTMLTextAreaElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
+
+  const location = useLocation();
+  const editData = location.state?.postData;
+  const isEditing = !!location.state?.postData;
+
+  const [originalValues, setOriginalValues] = useState({ title: '', text: '', cta: '' });
+  const [hasChanges, setHasChanges] = useState(false);
+  const [savedPostId, setSavedPostId] = useState<string | null>(null);
+  const [postCount, setPostCount] = useState<number>(0);
 
   useEffect(() => {
     const totalCount = title.length + text.length + cta.length;
@@ -87,6 +104,49 @@ export function Editor({ title, text, cta, disabled = false, onChange }: EditorP
 
     loadHelpContent();
   }, []);
+
+  useEffect(() => {
+    if (editData) {
+      setOriginalValues({
+        title: editData.title || '',
+        text: editData.text || '',
+        cta: editData.cta || ''
+      });
+    } else {
+      setOriginalValues({ title, text, cta });
+    }
+  }, [editData]);
+
+  useEffect(() => {
+    const hasChanged = 
+      title !== originalValues.title ||
+      text !== originalValues.text ||
+      cta !== originalValues.cta;
+    
+    setHasChanges(hasChanged);
+  }, [title, text, cta, originalValues]);
+
+  useEffect(() => {
+    const fetchPostCount = async () => {
+      if (!user) return;
+      
+      try {
+        const { count, error } = await supabase
+          .from('posts')
+          .select('*', { count: 'exact', head: true })
+          .eq('user_id', user.id);
+          
+        if (error) throw error;
+        setPostCount(count || 0);
+      } catch (error) {
+        console.error('Error fetching post count:', error);
+      }
+    };
+
+    if (user) {
+      fetchPostCount();
+    }
+  }, [user]);
 
   const getActiveRef = () => {
     switch (activeField) {
@@ -274,10 +334,55 @@ export function Editor({ title, text, cta, disabled = false, onChange }: EditorP
     }
   };
 
+  const handleSave = async () => {
+    try {
+      if (isEditing || savedPostId) {
+        // Update bestehenden Post
+        const { error } = await supabase
+          .from('posts')
+          .upsert([
+            {
+              id: editData?.id || savedPostId,
+              title: title,
+              text: text,
+              cta: cta,
+              user_id: user?.id
+            }
+          ]);
+        if (error) throw error;
+      } else {
+        // Erstelle neuen Post
+        const { data, error } = await supabase
+          .from('posts')
+          .insert([
+            {
+              title: title,
+              text: text,
+              cta: cta,
+              user_id: user?.id
+            }
+          ])
+          .select('id')
+          .single();
+          
+        if (error) throw error;
+        setSavedPostId(data.id);
+      }
+
+      setOriginalValues({ title, text, cta });
+      setShowSuccessModal(true);
+    } catch (error) {
+      console.error('Error saving post:', error);
+      alert('Error saving post');
+    }
+  };
+
   return (
     <div className="flex flex-col h-full relative">
       <div className="flex items-center mb-4">
-        <h2 className="text-xl font-semibold text-gray-900">2. Edit Post</h2>
+        <h2 className="text-xl font-semibold text-gray-900">
+          {editData ? 'Edit Post' : '2. Edit Post'}
+        </h2>
         <InfoIcon
           title="Post Editor"
           content={helpContent}
@@ -406,10 +511,34 @@ export function Editor({ title, text, cta, disabled = false, onChange }: EditorP
         />
       </div>
 
-      <div className="border-t border-gray-200 pt-4 flex-shrink-0">
-        <div className={`text-sm ${charCount > 3000 ? 'text-red-500' : 'text-gray-500'}`}>
+      <div className="mt-4 flex justify-between items-center">
+        <div className="text-sm text-gray-500">
           Characters: {charCount}/3000
         </div>
+        {user && (
+          <button
+            onClick={handleSave}
+            disabled={Boolean(
+              disabled || 
+              ((isEditing || savedPostId) && !hasChanges) ||
+              (!isEditing && !savedPostId && postCount >= POST_LIMIT)
+            )}
+            className={`px-4 py-2 rounded-lg transition-all duration-200 flex items-center justify-center group relative ${
+              disabled || ((isEditing || savedPostId) && !hasChanges) || (!isEditing && !savedPostId && postCount >= POST_LIMIT)
+                ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                : 'bg-blue-600 text-white hover:bg-blue-700'
+            }`}
+            title={!isEditing && !savedPostId && postCount >= POST_LIMIT ? 
+              `You have reached the maximum limit of ${POST_LIMIT} posts` : ''}
+          >
+            {isEditing || savedPostId ? 'Update Post' : 'Save Post'}
+            {!isEditing && !savedPostId && postCount >= POST_LIMIT && (
+              <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-1 bg-gray-800 text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                Maximum limit of {POST_LIMIT} posts reached
+              </div>
+            )}
+          </button>
+        )}
       </div>
 
       {isTransforming && (
@@ -425,6 +554,31 @@ export function Editor({ title, text, cta, disabled = false, onChange }: EditorP
           onOption={handleContextMenuOption}
           onClose={() => setContextMenu({ show: false, x: 0, y: 0, field: null })}
         />
+      )}
+
+      {showSuccessModal && (
+        <Modal
+          title={isEditing ? "Post Updated" : "Post Saved"}
+          onClose={() => setShowSuccessModal(false)}
+        >
+          <div className="space-y-4">
+            <p className="text-gray-600">
+              {isEditing 
+                ? "Your changes have been saved successfully!"
+                : "Your post has been saved successfully!"
+              } You can find it in your dashboard.
+            </p>
+            
+            <div className="flex justify-end">
+              <button
+                onClick={() => setShowSuccessModal(false)}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   );
